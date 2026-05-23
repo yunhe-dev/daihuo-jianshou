@@ -3,6 +3,9 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { assets, projects, scripts } from "@/lib/db/schema";
 import { renderShotPlaceholderImage } from "@/lib/project-media";
+import { createProvider } from "@/lib/providers";
+import { resolveRuntimeAIConfig } from "@/lib/ai-config";
+import { downloadRemoteMedia } from "@/lib/remote-media";
 
 async function getProjectAndScript(projectId: string) {
   const db = getDb();
@@ -91,6 +94,7 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
+    const runtimeAI = resolveRuntimeAIConfig(body.settings || { providers: {} });
     const { db, project, selectedShots } = await getProjectAndScript(id);
     const targetShotId = typeof body.shotId === "number" ? body.shotId : null;
     const targetShots = selectedShots.filter((shot) => !targetShotId || shot.shotId === targetShotId);
@@ -106,8 +110,53 @@ export async function POST(
         .where(and(eq(assets.projectId, id), eq(assets.shotId, shot.shotId)));
 
       let filePath = buildProductImageFallback(project.productImages || [], shot.shotId) || null;
+      let provider = shot.visualSource === "ai_generate" ? "local-render" : "project-image";
+      let model = shot.visualSource === "ai_generate" ? "ffmpeg-drawtext" : "uploaded-image";
 
-      if (shot.visualSource === "ai_generate" || !filePath) {
+      if (shot.visualSource === "ai_generate") {
+        if (runtimeAI?.imageModel) {
+          try {
+            const providerClient = createProvider({
+              name: runtimeAI.provider,
+              apiKey: runtimeAI.apiKey,
+              baseUrl: runtimeAI.baseUrl,
+            });
+            const imageResult = await providerClient.generateImage({
+              modelId: runtimeAI.imageModel,
+              mode: "text-to-image",
+              prompt: shot.prompt || shot.description,
+              width: 1080,
+              height: 1920,
+              count: 1,
+            });
+            const remoteImageUrl = imageResult.imageUrls[0];
+            if (!remoteImageUrl) {
+              throw new Error("AI 生图未返回可用图片地址");
+            }
+            filePath = await downloadRemoteMedia({
+              projectId: id,
+              sourceUrl: remoteImageUrl,
+              subdir: "generated-ai",
+              fileBaseName: `shot-${shot.shotId}`,
+              fallbackExt: "png",
+            });
+            provider = runtimeAI.provider;
+            model = runtimeAI.imageModel;
+          } catch (error) {
+            throw new Error(
+              `AI 生图失败（${runtimeAI.provider}/${runtimeAI.imageModel}）: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        } else {
+          filePath = await renderShotPlaceholderImage({
+            projectId: id,
+            productName: project.productName || project.name,
+            shot,
+          });
+        }
+      } else if (!filePath) {
         filePath = await renderShotPlaceholderImage({
           projectId: id,
           productName: project.productName || project.name,
@@ -123,8 +172,8 @@ export async function POST(
         thumbnailPath: filePath,
         prompt: shot.prompt || "",
         status: "done" as const,
-        provider: shot.visualSource === "ai_generate" ? "local-render" : "project-image",
-        model: shot.visualSource === "ai_generate" ? "ffmpeg-drawtext" : "uploaded-image",
+        provider,
+        model,
       };
 
       if (existing[0]) {

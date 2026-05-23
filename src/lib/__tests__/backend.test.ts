@@ -86,6 +86,16 @@ describe("buildUserPrompt", () => {
     const prompt = buildUserPrompt(baseInput);
     expect(prompt).toContain("25秒");
   });
+
+  it("未知品类时回退到默认模板", () => {
+    const prompt = buildUserPrompt({
+      ...baseInput,
+      category: "other" as ScriptGenerationInput["category"],
+    });
+
+    expect(prompt).toContain("美妆护肤");
+    expect(prompt).toContain("参考脚本案例");
+  });
 });
 
 // ==================== FFmpeg 命令生成测试 ====================

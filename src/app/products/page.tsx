@@ -1,8 +1,16 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { LuPlus, LuTrash2, LuPencil, LuPackage, LuArrowLeft, LuImage, LuX } from "react-icons/lu";
+import {
+  LuArrowLeft,
+  LuImage,
+  LuPackage,
+  LuPencil,
+  LuPlus,
+  LuTrash2,
+  LuX,
+} from "react-icons/lu";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,12 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  useProductLibraryStore,
-  type ProductItem,
-} from "@/lib/stores/product-library-store";
 
-// 品类选项
 const categoryOptions = [
   { value: "beauty", label: "美妆护肤" },
   { value: "food", label: "食品零食" },
@@ -31,7 +34,6 @@ const categoryOptions = [
   { value: "other", label: "其他" },
 ] as const;
 
-// 品类颜色映射
 const categoryColorMap: Record<string, string> = {
   beauty: "bg-pink-500/20 text-pink-400",
   food: "bg-amber-500/20 text-amber-400",
@@ -41,42 +43,96 @@ const categoryColorMap: Record<string, string> = {
   other: "bg-zinc-500/20 text-zinc-400",
 };
 
-// 品类中文名映射
 const categoryLabelMap: Record<string, string> = Object.fromEntries(
   categoryOptions.map((opt) => [opt.value, opt.label])
 );
 
-export default function ProductsPage() {
-  const { products, addProduct, updateProduct, removeProduct } =
-    useProductLibraryStore();
+type Product = {
+  id: string;
+  name: string;
+  category: "beauty" | "food" | "home" | "fashion" | "tech" | "other";
+  description?: string | null;
+  images: string[];
+  price?: string | null;
+  targetAudience?: string | null;
+  videoCount: number | null;
+  createdAt?: string | null;
+};
 
-  // 表单状态
+type UploadImage = {
+  id: string;
+  url: string;
+  file?: File;
+};
+
+export default function ProductsPage() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [category, setCategory] = useState<ProductItem["category"]>("other");
+  const [category, setCategory] = useState<Product["category"]>("other");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
-
-  // 图片上传状态
-  const [images, setImages] = useState<{ id: string; url: string; file?: File }[]>([]);
+  const [images, setImages] = useState<UploadImage[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 重置表单
-  const resetForm = () => {
+  const previewUrls = useMemo(
+    () => images.filter((img) => img.file).map((img) => img.url),
+    [images]
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const url of previewUrls) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [previewUrls]);
+
+  const loadProducts = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/products");
+      if (!res.ok) {
+        throw new Error("商品列表加载失败");
+      }
+      const data = (await res.json()) as Product[];
+      setProducts(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "商品列表加载失败");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadProducts();
+  }, [loadProducts]);
+
+  const resetForm = useCallback(() => {
     setName("");
     setCategory("other");
     setDescription("");
     setPrice("");
     setTargetAudience("");
-    setImages([]);
-    setIsFormOpen(false);
+    setImages((prev) => {
+      prev.forEach((img) => {
+        if (img.file) URL.revokeObjectURL(img.url);
+      });
+      return [];
+    });
     setEditingId(null);
-  };
+    setIsFormOpen(false);
+    setError(null);
+  }, []);
 
-  // 处理图片选择
   const handleFiles = useCallback(
     (files: FileList | null) => {
       if (!files) return;
@@ -85,7 +141,7 @@ export default function ProductsPage() {
 
       const newImages = Array.from(files)
         .slice(0, remaining)
-        .filter((f) => f.type.startsWith("image/"))
+        .filter((file) => file.type.startsWith("image/"))
         .map((file) => ({
           id: crypto.randomUUID(),
           url: URL.createObjectURL(file),
@@ -97,7 +153,6 @@ export default function ProductsPage() {
     [images.length]
   );
 
-  // 拖拽事件处理
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -117,7 +172,6 @@ export default function ProductsPage() {
     [handleFiles]
   );
 
-  // 删除图片
   const removeImage = useCallback((id: string) => {
     setImages((prev) => {
       const target = prev.find((img) => img.id === id);
@@ -126,73 +180,124 @@ export default function ProductsPage() {
     });
   }, []);
 
-  // 打开编辑表单
-  const startEdit = (product: ProductItem) => {
+  const startEdit = useCallback((product: Product) => {
     setEditingId(product.id);
     setName(product.name);
     setCategory(product.category);
     setDescription(product.description || "");
     setPrice(product.price || "");
     setTargetAudience(product.targetAudience || "");
-    // 将已有图片 URL 转为展示格式
     setImages(
-      product.images.map((url) => ({
+      (product.images || []).map((url) => ({
         id: crypto.randomUUID(),
         url,
       }))
     );
     setIsFormOpen(true);
-  };
+    setError(null);
+  }, []);
 
-  // 保存商品
-  const handleSave = () => {
-    if (!name.trim()) return;
-
-    const imageUrls = images.map((img) => img.url);
-
-    if (editingId) {
-      // 编辑模式
-      updateProduct(editingId, {
-        name: name.trim(),
-        category,
-        description: description.trim() || undefined,
-        images: imageUrls,
-        price: price.trim() || undefined,
-        targetAudience: targetAudience.trim() || undefined,
-      });
-    } else {
-      // 新增模式
-      const newProduct: ProductItem = {
-        id: crypto.randomUUID(),
-        name: name.trim(),
-        category,
-        description: description.trim() || undefined,
-        images: imageUrls,
-        price: price.trim() || undefined,
-        targetAudience: targetAudience.trim() || undefined,
-        videoCount: 0,
-        createdAt: new Date(),
-      };
-      addProduct(newProduct);
+  const uploadNewFiles = useCallback(async (productId: string) => {
+    const newFiles = images.filter((img) => img.file);
+    if (newFiles.length === 0) {
+      return [];
     }
 
-    resetForm();
-  };
+    const formData = new FormData();
+    newFiles.forEach((img) => {
+      if (img.file) formData.append("files", img.file);
+    });
+    formData.append("projectId", productId);
 
-  // 删除商品
-  const handleDelete = (id: string) => {
-    removeProduct(id);
-    // 如果正在编辑被删除的商品，关闭表单
-    if (editingId === id) resetForm();
-  };
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || "商品图片上传失败");
+    }
+
+    const data = (await res.json()) as { paths: string[] };
+    return data.paths;
+  }, [images]);
+
+  const handleSave = useCallback(async () => {
+    if (!name.trim() || isSaving) return;
+
+    setIsSaving(true);
+    setError(null);
+    const productId = editingId || crypto.randomUUID();
+
+    try {
+      const existingImages = images.filter((img) => !img.file).map((img) => img.url);
+      const uploadedImages = await uploadNewFiles(productId);
+      const payload = {
+        id: productId,
+        name: name.trim(),
+        category,
+        description: description.trim() || null,
+        images: [...existingImages, ...uploadedImages],
+        price: price.trim() || null,
+        targetAudience: targetAudience.trim() || null,
+      };
+
+      const res = await fetch(editingId ? `/api/products/${editingId}` : "/api/products", {
+        method: editingId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "商品保存失败");
+      }
+
+      await loadProducts();
+      resetForm();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "商品保存失败");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [
+    category,
+    description,
+    editingId,
+    images,
+    isSaving,
+    loadProducts,
+    name,
+    price,
+    resetForm,
+    targetAudience,
+    uploadNewFiles,
+  ]);
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      try {
+        const res = await fetch(`/api/products/${id}`, { method: "DELETE" });
+        if (!res.ok) {
+          throw new Error("商品删除失败");
+        }
+        if (editingId === id) {
+          resetForm();
+        }
+        await loadProducts();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "商品删除失败");
+      }
+    },
+    [editingId, loadProducts, resetForm]
+  );
 
   return (
     <div className="min-h-screen grid-bg">
-      {/* 顶部导航 */}
       <header className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-3">
-            {/* Logo */}
             <div className="flex h-8 w-8 items-center justify-center rounded-lg brand-gradient">
               <svg
                 width="18"
@@ -211,11 +316,7 @@ export default function ProductsPage() {
             <span className="text-lg font-bold tracking-tight">商品库</span>
           </div>
           <Link href="/">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-            >
+            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
               <LuArrowLeft className="w-4 h-4" />
               <span className="ml-1.5">返回首页</span>
             </Button>
@@ -224,13 +325,12 @@ export default function ProductsPage() {
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-10">
-        {/* 页面标题 + 添加按钮 */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="mb-8 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
               <span className="brand-gradient-text">商品库</span>管理
             </h1>
-            <p className="text-sm text-muted-foreground mt-1">
+            <p className="mt-1 text-sm text-muted-foreground">
               集中管理你的商品信息，创建项目时可快速选用
             </p>
           </div>
@@ -242,45 +342,41 @@ export default function ProductsPage() {
                 setIsFormOpen(true);
               }}
             >
-              <LuPlus className="w-4 h-4 mr-1.5" />
+              <LuPlus className="mr-1.5 h-4 w-4" />
               添加商品
             </Button>
           )}
         </div>
 
-        {/* 添加/编辑表单 */}
-        {isFormOpen && (
-          <Card className="glass-card ring-1 ring-primary/30 mb-8">
-            <CardContent className="p-5 space-y-5">
-              <h3 className="text-sm font-semibold">
-                {editingId ? "编辑商品" : "添加商品"}
-              </h3>
+        {error && (
+          <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
+        )}
 
-              {/* 商品名称 */}
+        {isFormOpen && (
+          <Card className="glass-card mb-8 ring-1 ring-primary/30">
+            <CardContent className="space-y-5 p-5">
+              <h3 className="text-sm font-semibold">{editingId ? "编辑商品" : "添加商品"}</h3>
+
               <div className="space-y-2">
                 <Label htmlFor="productName" className="text-sm font-medium">
                   商品名称
-                  <span className="text-destructive ml-0.5">*</span>
+                  <span className="ml-0.5 text-destructive">*</span>
                 </Label>
                 <Input
                   id="productName"
                   placeholder="例如：小米手环8 NFC版"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="bg-muted/30 border-border/50 focus:border-primary"
+                  className="border-border/50 bg-muted/30 focus:border-primary"
                 />
               </div>
 
-              {/* 品类选择 */}
               <div className="space-y-2">
                 <Label className="text-sm font-medium">商品品类</Label>
-                <Select
-                  value={category}
-                  onValueChange={(val) =>
-                    setCategory((val ?? "other") as ProductItem["category"])
-                  }
-                >
-                  <SelectTrigger className="w-full bg-muted/30 border-border/50">
+                <Select value={category} onValueChange={(val) => setCategory((val ?? "other") as Product["category"])}>
+                  <SelectTrigger className="w-full border-border/50 bg-muted/30">
                     <SelectValue placeholder="选择商品品类" />
                   </SelectTrigger>
                   <SelectContent>
@@ -293,7 +389,6 @@ export default function ProductsPage() {
                 </Select>
               </div>
 
-              {/* 卖点描述 */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="description" className="text-sm font-medium">
@@ -307,23 +402,19 @@ export default function ProductsPage() {
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={3}
-                  className="bg-muted/30 border-border/50 focus:border-primary resize-none"
+                  className="resize-none border-border/50 bg-muted/30 focus:border-primary"
                 />
               </div>
 
-              {/* 商品图片上传 */}
               <div>
-                <div className="flex items-center justify-between mb-3">
+                <div className="mb-3 flex items-center justify-between">
                   <Label className="text-sm font-medium">商品图片</Label>
-                  <span className="text-xs text-muted-foreground">
-                    {images.length}/5 张
-                  </span>
+                  <span className="text-xs text-muted-foreground">{images.length}/5 张</span>
                 </div>
 
-                {/* 拖拽上传区域 */}
                 {images.length < 5 && (
                   <div
-                    className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
+                    className={`relative cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-all ${
                       isDragging
                         ? "border-primary bg-primary/5"
                         : "border-border/60 hover:border-primary/50 hover:bg-muted/20"
@@ -346,16 +437,13 @@ export default function ProductsPage() {
                     />
                     <div className="flex flex-col items-center gap-3">
                       <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted/50">
-                        <LuImage className="w-6 h-6 text-muted-foreground" />
+                        <LuImage className="h-6 w-6 text-muted-foreground" />
                       </div>
                       <div>
                         <p className="text-sm font-medium">
-                          拖拽图片到这里，或{" "}
-                          <span className="brand-gradient-text font-semibold">
-                            点击上传
-                          </span>
+                          拖拽图片到这里，或 <span className="font-semibold brand-gradient-text">点击上传</span>
                         </p>
-                        <p className="text-xs text-muted-foreground mt-1">
+                        <p className="mt-1 text-xs text-muted-foreground">
                           支持 JPG / PNG / WebP，最多 5 张
                         </p>
                       </div>
@@ -363,41 +451,29 @@ export default function ProductsPage() {
                   </div>
                 )}
 
-                {/* 已上传图片预览网格 */}
                 {images.length > 0 && (
-                  <div
-                    className={`grid grid-cols-3 sm:grid-cols-5 gap-3 ${
-                      images.length < 5 ? "mt-4" : ""
-                    }`}
-                  >
+                  <div className={`grid grid-cols-3 gap-3 sm:grid-cols-5 ${images.length < 5 ? "mt-4" : ""}`}>
                     {images.map((img) => (
                       <div
                         key={img.id}
-                        className="group relative aspect-square rounded-lg overflow-hidden border border-border/50 bg-muted/20"
+                        className="group relative aspect-square overflow-hidden rounded-lg border border-border/50 bg-muted/20"
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={img.url}
-                          alt="商品图片"
-                          className="h-full w-full object-cover"
-                        />
-                        {/* 删除按钮 */}
+                        <img src={img.url} alt="商品图片" className="h-full w-full object-cover" />
                         <button
                           onClick={() => removeImage(img.id)}
-                          className="absolute top-1 right-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
+                          className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500"
                         >
-                          <LuX className="w-3 h-3" />
+                          <LuX className="h-3 w-3" />
                         </button>
-                        {/* 悬停遮罩 */}
-                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
+                        <div className="absolute inset-0 bg-black/0 transition-colors group-hover:bg-black/10" />
                       </div>
                     ))}
                   </div>
                 )}
               </div>
 
-              {/* 价格信息 */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label htmlFor="price" className="text-sm font-medium">
@@ -410,17 +486,13 @@ export default function ProductsPage() {
                     placeholder="例如：¥199"
                     value={price}
                     onChange={(e) => setPrice(e.target.value)}
-                    className="bg-muted/30 border-border/50 focus:border-primary"
+                    className="border-border/50 bg-muted/30 focus:border-primary"
                   />
                 </div>
 
-                {/* 目标人群 */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <Label
-                      htmlFor="targetAudience"
-                      className="text-sm font-medium"
-                    >
+                    <Label htmlFor="targetAudience" className="text-sm font-medium">
                       目标人群
                     </Label>
                     <span className="text-xs text-muted-foreground">选填</span>
@@ -430,12 +502,11 @@ export default function ProductsPage() {
                     placeholder="例如：18-35岁女性"
                     value={targetAudience}
                     onChange={(e) => setTargetAudience(e.target.value)}
-                    className="bg-muted/30 border-border/50 focus:border-primary"
+                    className="border-border/50 bg-muted/30 focus:border-primary"
                   />
                 </div>
               </div>
 
-              {/* 保存/取消按钮 */}
               <div className="flex items-center justify-end gap-2 pt-2">
                 <Button variant="outline" size="sm" onClick={resetForm}>
                   取消
@@ -443,27 +514,29 @@ export default function ProductsPage() {
                 <Button
                   size="sm"
                   className="brand-gradient text-white"
-                  onClick={handleSave}
-                  disabled={!name.trim()}
+                  onClick={() => void handleSave()}
+                  disabled={!name.trim() || isSaving}
                 >
-                  {editingId ? "保存修改" : "添加商品"}
+                  {isSaving ? "保存中..." : editingId ? "保存修改" : "添加商品"}
                 </Button>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* 商品列表 */}
-        {products.length === 0 && !isFormOpen ? (
-          // 空状态
+        {isLoading ? (
+          <Card className="glass-card">
+            <CardContent className="py-16 text-center text-sm text-muted-foreground">
+              正在加载商品...
+            </CardContent>
+          </Card>
+        ) : products.length === 0 && !isFormOpen ? (
           <Card className="glass-card">
             <CardContent className="flex flex-col items-center justify-center py-16 text-center">
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted/50">
-                <LuPackage className="w-7 h-7 text-muted-foreground" />
+                <LuPackage className="h-7 w-7 text-muted-foreground" />
               </div>
-              <p className="text-muted-foreground mb-4">
-                还没有商品，添加你的第一个商品
-              </p>
+              <p className="mb-4 text-muted-foreground">还没有商品，添加你的第一个商品</p>
               <Button
                 className="brand-gradient text-white"
                 onClick={() => {
@@ -471,7 +544,7 @@ export default function ProductsPage() {
                   setIsFormOpen(true);
                 }}
               >
-                <LuPlus className="w-4 h-4 mr-1.5" />
+                <LuPlus className="mr-1.5 h-4 w-4" />
                 添加商品
               </Button>
             </CardContent>
@@ -479,22 +552,16 @@ export default function ProductsPage() {
         ) : (
           products.length > 0 && (
             <div>
-              <div className="flex items-center justify-between mb-5">
+              <div className="mb-5 flex items-center justify-between">
                 <h2 className="text-lg font-semibold">全部商品</h2>
-                <span className="text-sm text-muted-foreground">
-                  {products.length} 个商品
-                </span>
+                <span className="text-sm text-muted-foreground">{products.length} 个商品</span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {products.map((product) => (
-                  <Card
-                    key={product.id}
-                    className="card-hover glass-card cursor-pointer group"
-                  >
+                  <Card key={product.id} className="glass-card group cursor-pointer card-hover">
                     <CardContent className="p-0">
-                      {/* 商品缩略图 */}
-                      <div className="relative aspect-video bg-muted/30 rounded-t-lg overflow-hidden">
+                      <div className="relative aspect-video overflow-hidden rounded-t-lg bg-muted/30">
                         {product.images.length > 0 ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
@@ -504,11 +571,10 @@ export default function ProductsPage() {
                           />
                         ) : (
                           <div className="absolute inset-0 flex items-center justify-center">
-                            <LuImage className="w-8 h-8 text-muted-foreground/50" />
+                            <LuImage className="h-8 w-8 text-muted-foreground/50" />
                           </div>
                         )}
-                        {/* 品类标签 */}
-                        <div className="absolute top-2 left-2">
+                        <div className="absolute left-2 top-2">
                           <Badge
                             className={`${
                               categoryColorMap[product.category] || categoryColorMap.other
@@ -517,41 +583,39 @@ export default function ProductsPage() {
                             {categoryLabelMap[product.category] || "其他"}
                           </Badge>
                         </div>
-                        {/* 悬浮操作按钮 */}
-                        <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               startEdit(product);
                             }}
-                            className="flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-primary transition-colors"
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-primary"
                           >
-                            <LuPencil className="w-3.5 h-3.5" />
+                            <LuPencil className="h-3.5 w-3.5" />
                           </button>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleDelete(product.id);
+                              void handleDelete(product.id);
                             }}
-                            className="flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white hover:bg-red-500 transition-colors"
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-red-500"
                           >
-                            <LuTrash2 className="w-3.5 h-3.5" />
+                            <LuTrash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </div>
-                      {/* 商品信息 */}
                       <div className="p-4">
-                        <h3 className="font-medium text-sm truncate group-hover:text-primary transition-colors">
+                        <h3 className="truncate text-sm font-medium transition-colors group-hover:text-primary">
                           {product.name}
                         </h3>
-                        <div className="flex items-center justify-between mt-2">
-                          {product.price && (
-                            <span className="text-xs text-primary font-medium">
-                              {product.price}
-                            </span>
+                        <div className="mt-2 flex items-center justify-between">
+                          {product.price ? (
+                            <span className="text-xs font-medium text-primary">{product.price}</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">未设置价格</span>
                           )}
-                          <span className="text-xs text-muted-foreground ml-auto">
-                            {product.videoCount} 个视频
+                          <span className="ml-auto text-xs text-muted-foreground">
+                            {product.videoCount ?? 0} 个视频
                           </span>
                         </div>
                       </div>

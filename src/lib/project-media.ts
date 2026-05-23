@@ -7,6 +7,7 @@ import type { Shot } from "@/lib/db/schema";
 
 const execFileAsync = promisify(execFile);
 const FFMPEG_BIN = "/opt/homebrew/bin/ffmpeg";
+const FFPROBE_BIN = "/opt/homebrew/bin/ffprobe";
 const DRAW_TEXT_FONT = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
 
 export type RenderSlide = {
@@ -145,4 +146,28 @@ export async function composeStoryboardVideo(params: {
     width,
     height,
   };
+}
+
+export async function probeVideoDurationMs(filePath: string) {
+  if (!existsSync(FFPROBE_BIN)) {
+    return null;
+  }
+
+  const localPath = apiPathToLocalFile(filePath);
+  const { stdout } = await execFileAsync(FFPROBE_BIN, [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1",
+    localPath,
+  ]);
+
+  const seconds = Number.parseFloat(stdout.trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return null;
+  }
+
+  return Math.round(seconds * 1000);
 }

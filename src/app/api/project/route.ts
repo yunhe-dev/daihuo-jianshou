@@ -27,11 +27,17 @@ export async function POST(req: NextRequest) {
     const newProject = await db
       .insert(projects)
       .values({
+        id: body.id,
         name: body.name || "未命名项目",
         productName: body.productName,
         productCategory: body.productCategory,
         productDescription: body.productDescription,
         productImages: body.productImages || [],
+        productId: body.productId,
+        videoMode: body.videoMode,
+        sourceType: body.sourceType,
+        sourceVideoUrl: body.sourceVideoUrl,
+        characterId: body.characterId,
       })
       .returning();
 

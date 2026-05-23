@@ -446,7 +446,7 @@ export function buildUserPrompt(input: ScriptGenerationInput): string {
   } = input;
 
   // 获取品类模板
-  const categoryData = getTemplatesByCategory(category) ?? getTemplatesByCategory("beauty");
+  const categoryData = getTemplatesByCategory(category);
   const categoryName = categoryNameMap[category] ?? categoryNameMap.beauty;
 
   // 获取风格指令
@@ -455,7 +455,10 @@ export function buildUserPrompt(input: ScriptGenerationInput): string {
     : stylePrompts[styleType];
 
   // 选择最合适的参考模板（取第一个作为参考）
-  const referenceTemplate = categoryData.templates[0];
+  const referenceTemplate = categoryData.templates[0] ?? {
+    name: "通用带货参考模板",
+    example: "开场快速抛出卖点，中段用场景或对比建立信任，结尾明确促单。",
+  };
 
   // 组装 prompt
   const parts: string[] = [];

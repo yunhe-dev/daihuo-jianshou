@@ -38,6 +38,10 @@ const categoryMap = {
 } as const;
 
 /** 根据品类获取对应模板和 prompt 指令 */
-export function getTemplatesByCategory(category: ProductCategory) {
-  return categoryMap[category];
+export function getTemplatesByCategory(category?: ProductCategory | string) {
+  if (!category) {
+    return categoryMap.beauty;
+  }
+
+  return categoryMap[category as ProductCategory] ?? categoryMap.beauty;
 }

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useSettingsStore } from "@/lib/stores/settings-store";
 import type { Shot } from "@/lib/db/schema";
 
 interface VideoClipItem {
@@ -62,10 +63,12 @@ const shotTypeLabels: Record<Shot["type"], { label: string; color: string }> = {
 
 export default function VideoPage() {
   const { id } = useParams<{ id: string }>();
+  const { providers, defaultImageModel, defaultVideoModel } = useSettingsStore();
   const [projectName, setProjectName] = useState("加载中...");
   const [shots, setShots] = useState<Shot[]>([]);
   const [clips, setClips] = useState<VideoClipItem[]>([]);
   const [compositionPath, setCompositionPath] = useState<string | null>(null);
+  const [compositionDuration, setCompositionDuration] = useState<number | null>(null);
   const [config, setConfig] = useState<ComposeConfig>({
     ttsEnabled: true,
     ttsVoice: "female-gentle",
@@ -96,6 +99,7 @@ export default function VideoPage() {
       setShots(data.script.shots);
       setClips(data.clips);
       setCompositionPath(data.composition?.outputPath || null);
+      setCompositionDuration(data.composition?.duration || null);
       setComposeDone(Boolean(data.composition?.outputPath));
       setComposeProgress(data.composition?.outputPath ? 100 : 0);
     } catch (loadError) {
@@ -109,10 +113,12 @@ export default function VideoPage() {
     void loadVideoData();
   }, [loadVideoData]);
 
-  const totalDuration = useMemo(
-    () => shots.reduce((sum, shot) => sum + shot.duration, 0),
-    [shots]
-  );
+  const totalDuration = useMemo(() => {
+    if (compositionDuration && compositionDuration > 0) {
+      return Math.round(compositionDuration / 1000);
+    }
+    return shots.reduce((sum, shot) => sum + shot.duration, 0);
+  }, [compositionDuration, shots]);
 
   const enrichedClips = useMemo(
     () =>
@@ -137,7 +143,14 @@ export default function VideoPage() {
       const res = await fetch(`/api/project/${id}/video`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
+        body: JSON.stringify({
+          ...config,
+          settings: {
+            providers,
+            defaultImageModel,
+            defaultVideoModel,
+          },
+        }),
       });
 
       if (!res.ok) {
@@ -157,7 +170,7 @@ export default function VideoPage() {
       clearInterval(progressTimer);
       setIsComposing(false);
     }
-  }, [config, id, loadVideoData]);
+  }, [config, defaultImageModel, defaultVideoModel, id, loadVideoData, providers]);
 
   return (
     <div className="min-h-screen grid-bg">

@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { assets, compositions, projects, scripts, videoClips } from "@/lib/db/schema";
-import { composeStoryboardVideo, renderShotPlaceholderImage } from "@/lib/project-media";
+import { composeStoryboardVideo, probeVideoDurationMs, renderShotPlaceholderImage } from "@/lib/project-media";
+import { createProvider } from "@/lib/providers";
+import { resolveRuntimeAIConfig } from "@/lib/ai-config";
+import { downloadRemoteMedia } from "@/lib/remote-media";
 
 async function getProjectState(projectId: string) {
   const db = getDb();
@@ -97,6 +100,7 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
+    const runtimeAI = resolveRuntimeAIConfig(body.settings || { providers: {} });
     const { db, project, selectedShots, assetRows } = await getProjectState(id);
 
     const assetMap = new Map(assetRows.map((asset) => [asset.shotId, asset]));
@@ -174,17 +178,81 @@ export async function POST(
       )
       .returning();
 
-    const compositionResult = await composeStoryboardVideo({
-      projectId: id,
-      aspectRatio: body.aspectRatio || "9:16",
-      slides: resolvedSlides.map(({ shot, asset }) => ({
-        duration: shot.duration,
-        inputPath: asset?.filePath || "",
-        subtitle: shot.voiceover,
-      })),
-    });
-
+    let compositionResult;
+    let compositionProvider = "local-render";
+    let compositionModel = "ffmpeg-storyboard";
     const totalDuration = selectedShots.reduce((sum, shot) => sum + shot.duration, 0);
+    let compositionDurationMs = totalDuration * 1000;
+
+    if (runtimeAI?.videoModel) {
+      try {
+        const providerClient = createProvider({
+          name: runtimeAI.provider,
+          apiKey: runtimeAI.apiKey,
+          baseUrl: runtimeAI.baseUrl,
+        });
+        const firstFrame = resolvedSlides[0]?.asset?.filePath || null;
+        const firstFrameUrl =
+          firstFrame && firstFrame.startsWith("/")
+            ? `${req.nextUrl.origin}${firstFrame}`
+            : firstFrame;
+        const videoPrompt = selectedShots
+          .map((shot) => `${shot.shotId}. ${shot.description} 旁白:${shot.voiceover}`)
+          .join("\n");
+        const videoResult = await providerClient.generateVideo({
+          modelId: runtimeAI.videoModel,
+          mode: firstFrameUrl ? "image-to-video" : "text-to-video",
+          prompt: `${project.productName || project.name} 电商短视频。${videoPrompt}`,
+          firstFrameUrl: firstFrameUrl || undefined,
+          duration: Math.min(Math.max(Math.round(selectedShots.reduce((sum, shot) => sum + shot.duration, 0) / 2), 5), 10),
+          width: body.aspectRatio === "16:9" ? 1280 : 720,
+          height: body.aspectRatio === "16:9" ? 720 : body.aspectRatio === "1:1" ? 1024 : 1280,
+          audioEnabled: Boolean(body.ttsEnabled),
+          voiceover: selectedShots.map((shot) => shot.voiceover).join(" "),
+        });
+        const remoteVideoUrl = videoResult.videoUrls[0];
+        if (!remoteVideoUrl) {
+          throw new Error("AI 生视频未返回可用视频地址");
+        }
+        const localVideoPath = await downloadRemoteMedia({
+          projectId: id,
+          sourceUrl: remoteVideoUrl,
+          subdir: "compositions",
+          fileBaseName: `ai-video-${Date.now()}`,
+          fallbackExt: "mp4",
+        });
+        compositionResult = {
+          outputPath: localVideoPath,
+          width: body.aspectRatio === "16:9" ? 1280 : 720,
+          height: body.aspectRatio === "16:9" ? 720 : body.aspectRatio === "1:1" ? 1024 : 1280,
+        };
+        compositionDurationMs =
+          (videoResult.duration ? Math.round(videoResult.duration * 1000) : null) ??
+          (await probeVideoDurationMs(localVideoPath)) ??
+          compositionDurationMs;
+        compositionProvider = runtimeAI.provider;
+        compositionModel = runtimeAI.videoModel;
+      } catch (error) {
+        throw new Error(
+          `AI 生视频失败（${runtimeAI.provider}/${runtimeAI.videoModel}）: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+
+    if (!compositionResult) {
+      compositionResult = await composeStoryboardVideo({
+        projectId: id,
+        aspectRatio: body.aspectRatio || "9:16",
+        slides: resolvedSlides.map(({ shot, asset }) => ({
+          duration: shot.duration,
+          inputPath: asset?.filePath || "",
+          subtitle: shot.voiceover,
+        })),
+      });
+    }
+
     const insertedCompositions = await db
       .insert(compositions)
       .values({
@@ -192,8 +260,8 @@ export async function POST(
         outputPath: compositionResult.outputPath,
         resolution: body.resolution || "1080p",
         aspectRatio: body.aspectRatio || "9:16",
-        duration: totalDuration * 1000,
-        bgmPath: body.bgm || null,
+        duration: compositionDurationMs,
+        bgmPath: compositionModel === "ffmpeg-storyboard" ? body.bgm || null : `${compositionProvider}:${compositionModel}`,
         ttsEnabled: Boolean(body.ttsEnabled),
         subtitleStyle: {
           fontFamily: "Arial Unicode",

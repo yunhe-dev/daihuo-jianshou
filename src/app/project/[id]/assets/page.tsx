@@ -7,6 +7,7 @@ import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useSettingsStore } from "@/lib/stores/settings-store";
 import type { Shot } from "@/lib/db/schema";
 
 interface AssetItem {
@@ -44,6 +45,7 @@ const shotTypeLabels: Record<Shot["type"], { label: string; color: string }> = {
 
 export default function AssetsPage() {
   const { id } = useParams<{ id: string }>();
+  const { providers, defaultImageModel, defaultVideoModel } = useSettingsStore();
   const [projectName, setProjectName] = useState("加载中...");
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [isBatchGenerating, setIsBatchGenerating] = useState(false);
@@ -87,7 +89,14 @@ export default function AssetsPage() {
         const res = await fetch(`/api/project/${id}/assets`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ shotId }),
+          body: JSON.stringify({
+            shotId,
+            settings: {
+              providers,
+              defaultImageModel,
+              defaultVideoModel,
+            },
+          }),
         });
 
         if (!res.ok) {
@@ -103,7 +112,7 @@ export default function AssetsPage() {
         );
       }
     },
-    [id]
+    [defaultImageModel, defaultVideoModel, id, providers]
   );
 
   const generateAll = useCallback(async () => {
@@ -115,7 +124,14 @@ export default function AssetsPage() {
       const res = await fetch(`/api/project/${id}/assets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ all: true }),
+        body: JSON.stringify({
+          all: true,
+          settings: {
+            providers,
+            defaultImageModel,
+            defaultVideoModel,
+          },
+        }),
       });
 
       if (!res.ok) {
@@ -130,7 +146,7 @@ export default function AssetsPage() {
     } finally {
       setIsBatchGenerating(false);
     }
-  }, [assets, id]);
+  }, [assets, defaultImageModel, defaultVideoModel, id, providers]);
 
   return (
     <div className="min-h-screen grid-bg">

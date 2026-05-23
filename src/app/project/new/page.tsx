@@ -43,7 +43,7 @@ const styleOptions = [
   { id: "scene", value: "scene", label: "场景安利", desc: "真实场景展示，沉浸式种草" },
   { id: "comparison", value: "comparison", label: "对比测评", desc: "横向对比突出优势" },
   { id: "story", value: "story", label: "剧情故事", desc: "故事化包装，增强代入感" },
-  { id: "auto", value: "pain_point", label: "智能推荐", desc: "AI 根据商品特性自动推荐" },
+  { id: "auto", value: "auto", label: "智能推荐", desc: "AI 根据商品特性自动推荐" },
 ];
 
 export default function NewProjectPage() {

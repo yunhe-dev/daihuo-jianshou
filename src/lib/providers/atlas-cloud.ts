@@ -1,7 +1,9 @@
 /**
  * Atlas Cloud Provider 实现
- * 基于 Atlas Cloud REST API，支持图片和视频生成
- * 文档参考: https://docs.atlas.cloud
+ * 基于 Atlas Cloud 当前媒体 API，支持图片和视频生成
+ * 文档参考: https://www.atlascloud.ai/docs/en/models/image
+ * 文档参考: https://www.atlascloud.ai/docs/en/models/video
+ * 文档参考: https://www.atlascloud.ai/docs/en/upload-files
  */
 
 import { BaseProvider, ProviderError } from './base'
@@ -19,26 +21,37 @@ import type {
 
 // ==================== Atlas Cloud API 响应类型 ====================
 
-interface AtlasCreateTaskResponse {
-  id: string
-  status: string
+interface AtlasCreatePredictionResponse {
+  data?: {
+    id?: string
+    status?: string
+    [key: string]: unknown
+  }
   [key: string]: unknown
 }
 
-interface AtlasTaskStatusResponse {
-  id: string
-  status: string
-  progress?: number
-  output?: {
-    images?: Array<{ url: string }>
-    videos?: Array<{ url: string; cover_url?: string; duration?: number }>
+interface AtlasPredictionResponse {
+  data?: {
+    id?: string
+    status?: string
+    outputs?: unknown[]
+    error?: string
+    created_at?: string
+    updated_at?: string
+    [key: string]: unknown
   }
-  error?: {
-    message: string
-    code: string
+  [key: string]: unknown
+}
+
+interface AtlasUploadResponse {
+  code?: number
+  message?: string
+  download_url?: string
+  url?: string
+  data?: {
+    url?: string
+    download_url?: string
   }
-  created_at?: string
-  updated_at?: string
   [key: string]: unknown
 }
 
@@ -51,63 +64,80 @@ interface AtlasModelResponse {
   [key: string]: unknown
 }
 
-interface AtlasListModelsResponse {
-  models: AtlasModelResponse[]
-}
-
 // ==================== Provider 实现 ====================
 
 export class AtlasCloudProvider extends BaseProvider {
   readonly name = 'atlas-cloud'
   readonly displayName = 'Atlas Cloud'
+  private readonly rootBaseUrl: string
 
   constructor(config: ProviderConfig) {
+    const rootBaseUrl = AtlasCloudProvider.normalizeBaseUrl(
+      config.baseUrl || 'https://api.atlascloud.ai'
+    )
     super({
       ...config,
-      baseUrl: config.baseUrl || 'https://api.atlas.cloud/v1',
+      baseUrl: rootBaseUrl,
     })
+    this.rootBaseUrl = rootBaseUrl
   }
 
   /**
    * 生成图片
    */
   async generateImage(options: ImageOptions): Promise<ImageResult> {
+    const imageUrl = options.referenceImageUrl
+      ? await this.prepareMediaUrl(options.referenceImageUrl)
+      : undefined
+
     const body = {
       model: options.modelId,
       prompt: options.prompt,
       negative_prompt: options.negativePrompt,
       width: options.width,
       height: options.height,
-      num_images: options.count ?? 1,
+      n: options.count ?? 1,
       guidance_scale: options.guidanceScale,
-      num_steps: options.steps,
+      steps: options.steps,
       seed: options.seed,
-      // image-to-image 模式的参考图
-      ...(options.referenceImageUrl && {
-        input_image: options.referenceImageUrl,
+      ...(imageUrl && {
+        image_url: imageUrl,
       }),
       ...options.extra,
     }
 
-    const response = await this.request<AtlasCreateTaskResponse>('/predictions', {
+    const response = await this.request<AtlasCreatePredictionResponse>('/api/v1/model/generateImage', {
       method: 'POST',
       body,
+      timeout: 60000,
     })
 
-    // Atlas Cloud 使用异步任务模式，需要轮询获取结果
-    const finalStatus = await this.pollTaskStatus(response.id)
-
-    if (!finalStatus.result) {
-      throw new ProviderError('任务完成但未返回结果', 'NO_RESULT', this.name)
+    const taskId = response.data?.id
+    if (!taskId) {
+      throw new ProviderError('Atlas Cloud 未返回任务 ID', 'NO_TASK_ID', this.name)
     }
 
-    return finalStatus.result as ImageResult
+    const finalStatus = await this.pollTaskStatus(taskId, {
+      interval: 5000,
+      maxAttempts: 120,
+    })
+    return this.ensureImageResult(finalStatus, options.modelId)
   }
 
   /**
    * 生成视频
    */
   async generateVideo(options: VideoOptions): Promise<VideoResult> {
+    const firstFrameUrl = options.firstFrameUrl
+      ? await this.prepareMediaUrl(options.firstFrameUrl)
+      : undefined
+    const lastFrameUrl = options.lastFrameUrl
+      ? await this.prepareMediaUrl(options.lastFrameUrl)
+      : undefined
+    const referenceVideoUrl = options.referenceVideoUrl
+      ? await this.prepareMediaUrl(options.referenceVideoUrl)
+      : undefined
+
     const body = {
       model: options.modelId,
       prompt: options.prompt,
@@ -119,78 +149,65 @@ export class AtlasCloudProvider extends BaseProvider {
       motion_strength: options.motionStrength,
       guidance_scale: options.guidanceScale,
       seed: options.seed,
-      // image-to-video 模式的首帧图
-      ...(options.firstFrameUrl && {
-        first_frame: options.firstFrameUrl,
+      ...(firstFrameUrl && {
+        image_url: firstFrameUrl,
       }),
-      ...(options.lastFrameUrl && {
-        last_frame: options.lastFrameUrl,
+      ...(lastFrameUrl && {
+        last_frame_url: lastFrameUrl,
       }),
-      // video-to-video 模式的参考视频
-      ...(options.referenceVideoUrl && {
-        input_video: options.referenceVideoUrl,
+      ...(referenceVideoUrl && {
+        video_url: referenceVideoUrl,
       }),
       ...options.extra,
     }
 
-    const response = await this.request<AtlasCreateTaskResponse>('/predictions', {
+    const response = await this.request<AtlasCreatePredictionResponse>('/api/v1/model/generateVideo', {
       method: 'POST',
       body,
+      timeout: 60000,
     })
 
-    // 异步轮询获取结果
-    const finalStatus = await this.pollTaskStatus(response.id)
-
-    if (!finalStatus.result) {
-      throw new ProviderError('任务完成但未返回结果', 'NO_RESULT', this.name)
+    const taskId = response.data?.id
+    if (!taskId) {
+      throw new ProviderError('Atlas Cloud 未返回任务 ID', 'NO_TASK_ID', this.name)
     }
 
-    return finalStatus.result as VideoResult
+    const finalStatus = await this.pollTaskStatus(taskId, {
+      interval: 5000,
+      maxAttempts: 180,
+    })
+    return this.ensureVideoResult(finalStatus, options.modelId)
   }
 
   /**
    * 查询任务状态
    */
   async getTaskStatus(taskId: string): Promise<TaskStatus> {
-    const response = await this.request<AtlasTaskStatusResponse>(
-      `/predictions/${taskId}`
+    const response = await this.request<AtlasPredictionResponse>(
+      `/api/v1/model/prediction/${taskId}`,
+      { timeout: 60000 }
     )
+    const data = response.data
+    if (!data?.id) {
+      throw new ProviderError('Atlas Cloud 未返回任务状态数据', 'INVALID_STATUS', this.name)
+    }
 
-    // 将 Atlas Cloud 的状态映射为统一状态
-    const status = this.mapStatus(response.status)
+    const status = this.mapStatus(data.status || '')
 
     const taskStatus: TaskStatus = {
-      taskId: response.id,
+      taskId: data.id,
       status,
-      progress: response.progress,
-      createdAt: response.created_at,
-      updatedAt: response.updated_at,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
     }
 
-    // 任务完成时解析结果
-    if (status === 'completed' && response.output) {
-      if (response.output.images && response.output.images.length > 0) {
-        taskStatus.result = {
-          taskId: response.id,
-          imageUrls: response.output.images.map((img) => img.url),
-          modelId: '',
-        }
-      } else if (response.output.videos && response.output.videos.length > 0) {
-        const firstVideo = response.output.videos[0]
-        taskStatus.result = {
-          taskId: response.id,
-          videoUrls: response.output.videos.map((v) => v.url),
-          coverImageUrl: firstVideo.cover_url,
-          duration: firstVideo.duration,
-          modelId: '',
-        }
-      }
+    if (status === 'completed') {
+      taskStatus.result = this.buildTaskResult(data.id, data.outputs ?? [])
     }
 
-    // 任务失败时填充错误信息
-    if (status === 'failed' && response.error) {
-      taskStatus.error = response.error.message
-      taskStatus.errorCode = response.error.code
+    if (status === 'failed') {
+      taskStatus.error = data.error || '未知错误'
+      taskStatus.errorCode = 'ATLAS_GENERATION_FAILED'
     }
 
     return taskStatus
@@ -201,9 +218,8 @@ export class AtlasCloudProvider extends BaseProvider {
    */
   async listModels(mediaType?: MediaType): Promise<Model[]> {
     try {
-      // 优先从 API 动态获取最新模型列表
-      const response = await this.request<AtlasListModelsResponse>('/models')
-      let models = response.models.map((m) => this.mapModel(m))
+      const response = await this.request<{ data?: AtlasModelResponse[] }>('/v1/models')
+      let models = (response.data || []).map((m) => this.mapModel(m))
       if (mediaType) {
         models = models.filter((m) => m.mediaType === mediaType)
       }
@@ -247,8 +263,10 @@ export class AtlasCloudProvider extends BaseProvider {
     const statusMap: Record<string, TaskStatusEnum> = {
       starting: 'pending',
       queued: 'pending',
+      pending: 'pending',
       processing: 'processing',
       running: 'processing',
+      in_progress: 'processing',
       succeeded: 'completed',
       completed: 'completed',
       failed: 'failed',
@@ -258,9 +276,148 @@ export class AtlasCloudProvider extends BaseProvider {
     return statusMap[atlasStatus] ?? 'pending'
   }
 
+  private static normalizeBaseUrl(baseUrl: string): string {
+    const url = new URL(baseUrl)
+    return url.origin
+  }
+
+  private async prepareMediaUrl(url: string): Promise<string> {
+    return this.uploadMedia(url, '/api/v1/model/uploadMedia')
+  }
+
+  private buildTaskResult(taskId: string, outputs: unknown[]) {
+    const urls = this.extractOutputUrls(outputs)
+    if (urls.length === 0) {
+      return undefined
+    }
+
+    const hasVideo = urls.some((url) => /\.(mp4|webm|mov)(\?|$)/i.test(url))
+    if (hasVideo) {
+      return {
+        taskId,
+        videoUrls: urls,
+        modelId: '',
+      } satisfies VideoResult
+    }
+
+    return {
+      taskId,
+      imageUrls: urls,
+      modelId: '',
+    } satisfies ImageResult
+  }
+
+  private ensureImageResult(status: TaskStatus, modelId: string): ImageResult {
+    const result = status.result
+    if (!result || !('imageUrls' in result) || result.imageUrls.length === 0) {
+      throw new ProviderError('任务完成但未返回图片结果', 'NO_IMAGE_RESULT', this.name)
+    }
+
+    return {
+      ...result,
+      modelId,
+    }
+  }
+
+  private ensureVideoResult(status: TaskStatus, modelId: string): VideoResult {
+    const result = status.result
+    if (!result || !('videoUrls' in result) || result.videoUrls.length === 0) {
+      throw new ProviderError('任务完成但未返回视频结果', 'NO_VIDEO_RESULT', this.name)
+    }
+
+    return {
+      ...result,
+      modelId,
+    }
+  }
+
+  private extractOutputUrls(outputs: unknown[]): string[] {
+    return outputs
+      .map((item) => {
+        if (typeof item === 'string') return item
+        if (!item || typeof item !== 'object') return null
+        const record = item as Record<string, unknown>
+        const candidates = [
+          record.url,
+          record.output,
+          record.image_url,
+          record.video_url,
+          record.file_url,
+        ]
+        return candidates.find((value): value is string => typeof value === 'string') ?? null
+      })
+      .filter((value): value is string => Boolean(value))
+  }
+
+  protected async uploadMedia(fileUrl: string, uploadPath: string): Promise<string> {
+    const source = await fetch(fileUrl)
+    if (!source.ok) {
+      throw new ProviderError(
+        `读取待上传媒体失败: ${source.status} ${source.statusText}`,
+        'MEDIA_FETCH_FAILED',
+        this.name,
+        source.status
+      )
+    }
+
+    const contentType = source.headers.get('content-type') || 'application/octet-stream'
+    const fileBuffer = Buffer.from(await source.arrayBuffer())
+    const fileName = this.inferUploadFilename(fileUrl, contentType)
+    const form = new FormData()
+    form.append('file', new Blob([fileBuffer], { type: contentType }), fileName)
+
+    const response = await fetch(`${this.rootBaseUrl}${uploadPath}`, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: form,
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '')
+      throw new ProviderError(
+        `上传媒体失败: ${response.status} ${response.statusText} - ${errorBody}`,
+        'MEDIA_UPLOAD_FAILED',
+        this.name,
+        response.status
+      )
+    }
+
+    const result = await response.json() as AtlasUploadResponse
+    const uploadedUrl =
+      result.url ||
+      result.download_url ||
+      result.data?.url ||
+      result.data?.download_url
+    if (!uploadedUrl) {
+      throw new ProviderError('上传媒体成功但未返回 URL', 'MEDIA_UPLOAD_NO_URL', this.name)
+    }
+
+    return uploadedUrl
+  }
+
+  private inferUploadFilename(fileUrl: string, contentType: string): string {
+    try {
+      const { pathname } = new URL(fileUrl)
+      const tail = pathname.split('/').pop()
+      if (tail && tail.includes('.')) return tail
+    } catch {
+      // noop
+    }
+
+    if (contentType.includes('png')) return 'upload.png'
+    if (contentType.includes('jpeg')) return 'upload.jpg'
+    if (contentType.includes('webp')) return 'upload.webp'
+    if (contentType.includes('mp4')) return 'upload.mp4'
+    if (contentType.includes('webm')) return 'upload.webm'
+    return 'upload.bin'
+  }
+
   /** 映射 Atlas Cloud 模型到统一模型格式 */
   private mapModel(atlasModel: AtlasModelResponse): Model {
-    const isVideo = atlasModel.type === 'video' || atlasModel.type === 'video-generation'
+    const isVideo =
+      atlasModel.type === 'video' ||
+      atlasModel.type === 'video-generation' ||
+      atlasModel.id.includes('video')
     return {
       id: atlasModel.id,
       name: atlasModel.name,
