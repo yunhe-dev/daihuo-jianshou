@@ -446,8 +446,8 @@ export function buildUserPrompt(input: ScriptGenerationInput): string {
   } = input;
 
   // 获取品类模板
-  const categoryData = getTemplatesByCategory(category);
-  const categoryName = categoryNameMap[category];
+  const categoryData = getTemplatesByCategory(category) ?? getTemplatesByCategory("beauty");
+  const categoryName = categoryNameMap[category] ?? categoryNameMap.beauty;
 
   // 获取风格指令
   const styleDirective = styleType === "custom"

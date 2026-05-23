@@ -5,6 +5,39 @@ import { generateScript, analyzeProduct } from "@/lib/script-engine/generator";
 import type { ScriptStyleType } from "@/lib/script-engine/prompts";
 import type { ProductCategory } from "@/lib/script-engine/templates";
 
+function normalizeCategory(category?: string): ProductCategory {
+  switch (category) {
+    case "beauty":
+    case "food":
+    case "home":
+    case "fashion":
+    case "tech":
+      return category;
+    case "digital":
+      return "tech";
+    default:
+      return "beauty";
+  }
+}
+
+function normalizeStyleType(styleType?: string): ScriptStyleType {
+  switch (styleType) {
+    case "pain_point":
+    case "scene":
+    case "comparison":
+    case "story":
+    case "custom":
+      return styleType;
+    case "pain-point":
+      return "pain_point";
+    case "scenario":
+      return "scene";
+    case "auto":
+    default:
+      return "pain_point";
+  }
+}
+
 /** 将本地图片路径转为 base64 data URI，供 LLM 视觉模型使用 */
 async function imagePathToBase64(imagePath: string): Promise<string> {
   // 已经是完整 URL 或 base64，直接返回
@@ -76,10 +109,10 @@ export async function POST(req: NextRequest) {
     // 生成脚本
     const scripts = await generateScript({
       productName,
-      category: (productCategory || "beauty") as ProductCategory,
+      category: normalizeCategory(productCategory),
       productDescription,
       productAnalysis: analysis,
-      styleType: (styleType || "pain_point") as ScriptStyleType,
+      styleType: normalizeStyleType(styleType),
       targetDuration: duration || 30,
       llmConfig,
     });

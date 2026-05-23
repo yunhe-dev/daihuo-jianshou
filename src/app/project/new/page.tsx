@@ -22,28 +22,28 @@ import {
 
 // 商品品类选项
 const categoryOptions = [
-  { value: "beauty", label: "美妆护肤" },
-  { value: "food", label: "食品零食" },
-  { value: "home", label: "家居日用" },
-  { value: "fashion", label: "服饰鞋包" },
-  { value: "digital", label: "数码3C" },
-  { value: "other", label: "其他" },
+  { id: "beauty", value: "beauty", label: "美妆护肤" },
+  { id: "food", value: "food", label: "食品零食" },
+  { id: "home", value: "home", label: "家居日用" },
+  { id: "fashion", value: "fashion", label: "服饰鞋包" },
+  { id: "tech", value: "tech", label: "数码3C" },
+  { id: "other", value: "other", label: "其他" },
 ];
 
 // 目标时长选项
 const durationOptions = [
-  { value: "15", label: "15s" },
-  { value: "30", label: "30s" },
-  { value: "60", label: "60s" },
+  { id: "15", value: "15", label: "15s" },
+  { id: "30", value: "30", label: "30s" },
+  { id: "60", value: "60", label: "60s" },
 ];
 
 // 脚本风格选项
 const styleOptions = [
-  { value: "pain-point", label: "痛点种草", desc: "直击用户痛点，激发购买欲" },
-  { value: "scenario", label: "场景安利", desc: "真实场景展示，沉浸式种草" },
-  { value: "comparison", label: "对比测评", desc: "横向对比突出优势" },
-  { value: "story", label: "剧情故事", desc: "故事化包装，增强代入感" },
-  { value: "auto", label: "智能推荐", desc: "AI 根据商品特性自动推荐" },
+  { id: "pain_point", value: "pain_point", label: "痛点种草", desc: "直击用户痛点，激发购买欲" },
+  { id: "scene", value: "scene", label: "场景安利", desc: "真实场景展示，沉浸式种草" },
+  { id: "comparison", value: "comparison", label: "对比测评", desc: "横向对比突出优势" },
+  { id: "story", value: "story", label: "剧情故事", desc: "故事化包装，增强代入感" },
+  { id: "auto", value: "pain_point", label: "智能推荐", desc: "AI 根据商品特性自动推荐" },
 ];
 
 export default function NewProjectPage() {
@@ -59,7 +59,7 @@ export default function NewProjectPage() {
   const [category, setCategory] = useState<string>("");
   const [sellingPoints, setSellingPoints] = useState("");
   const [duration, setDuration] = useState("30");
-  const [scriptStyle, setScriptStyle] = useState("auto");
+  const [scriptStyle, setScriptStyle] = useState("pain_point");
   const [videoMode, setVideoMode] = useState<string>("product_closeup");
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
 
@@ -207,9 +207,9 @@ export default function NewProjectPage() {
         body: JSON.stringify({
           projectId: project.id,
           productName,
-          category,
+          productCategory: category,
           productDescription: sellingPoints,
-          targetDuration: parseInt(duration),
+          duration: parseInt(duration),
           styleType: scriptStyle,
           videoMode,
           productImages: paths,
@@ -240,7 +240,23 @@ export default function NewProjectPage() {
       if (selectedTemplateId) {
         incrementUseCount(selectedTemplateId);
       }
-      if (!scriptRes.ok) throw new Error("脚本生成失败，请检查 LLM 设置后重试");
+      if (!scriptRes.ok) {
+        const errData = await scriptRes.json().catch(() => ({}));
+        throw new Error(errData.error || "脚本生成失败，请重试");
+      }
+
+      const scriptData = await scriptRes.json();
+
+      const saveScriptRes = await fetch(`/api/project/${project.id}/scripts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scripts: scriptData.scripts }),
+      });
+
+      if (!saveScriptRes.ok) {
+        const errData = await saveScriptRes.json().catch(() => ({}));
+        throw new Error(errData.error || "脚本保存失败，请重试");
+      }
 
       // 第4步：完成
       setProgress({ step: "done", percent: 100, message: "脚本生成完成！正在跳转..." });
@@ -425,7 +441,7 @@ export default function NewProjectPage() {
                   </SelectTrigger>
                   <SelectContent>
                     {categoryOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
+                      <SelectItem key={opt.id} value={opt.value}>
                         {opt.label}
                       </SelectItem>
                     ))}
@@ -553,7 +569,7 @@ export default function NewProjectPage() {
               <div className="grid grid-cols-3 gap-3">
                 {durationOptions.map((opt) => (
                   <button
-                    key={opt.value}
+                    key={opt.id}
                     onClick={() => setDuration(opt.value)}
                     className={`relative flex items-center justify-center h-11 rounded-lg border text-sm font-medium transition-all ${
                       duration === opt.value
@@ -683,7 +699,7 @@ export default function NewProjectPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {styleOptions.map((opt) => (
                   <button
-                    key={opt.value}
+                    key={opt.id}
                     onClick={() => setScriptStyle(opt.value)}
                     className={`relative flex flex-col items-start p-3.5 rounded-lg border text-left transition-all ${
                       scriptStyle === opt.value

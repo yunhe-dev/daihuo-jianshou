@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LuSettings, LuPlus, LuZap, LuVideo, LuFilm, LuPackage, LuTriangleAlert } from "react-icons/lu";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,23 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useSettingsStore } from "@/lib/stores/settings-store";
 
-// 模拟项目数据（后续接数据库）
-const mockProjects = [
-  {
-    id: "1",
-    name: "Tempo 德宝纸巾推广",
-    productName: "德宝纸巾",
-    status: "video" as const,
-    updatedAt: new Date("2026-03-20"),
-  },
-  {
-    id: "2",
-    name: "小米手环8测评",
-    productName: "小米手环8",
-    status: "done" as const,
-    updatedAt: new Date("2026-03-19"),
-  },
-];
+type Project = {
+  id: string;
+  name: string;
+  productName: string | null;
+  status: "draft" | "scripting" | "assets" | "video" | "composing" | "done";
+  updatedAt: string;
+};
 
 const statusMap: Record<string, { label: string; color: string }> = {
   draft: { label: "草稿", color: "bg-zinc-500/20 text-zinc-400" },
@@ -36,7 +26,45 @@ const statusMap: Record<string, { label: string; color: string }> = {
 };
 
 export default function HomePage() {
-  const [projects] = useState(mockProjects);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProjects = async () => {
+      try {
+        setProjectsLoading(true);
+        setProjectsError(null);
+
+        const res = await fetch("/api/project");
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || "项目加载失败");
+        }
+
+        const data = (await res.json()) as Project[];
+        if (!cancelled) {
+          setProjects(data);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setProjectsError(error instanceof Error ? error.message : "项目加载失败");
+        }
+      } finally {
+        if (!cancelled) {
+          setProjectsLoading(false);
+        }
+      }
+    };
+
+    loadProjects();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // 检查是否已配置 API 服务
   const { llm, providers } = useSettingsStore();
@@ -195,10 +223,30 @@ export default function HomePage() {
         <div>
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-lg font-semibold">我的项目</h2>
-            <span className="text-sm text-muted-foreground">{projects.length} 个项目</span>
+            <span className="text-sm text-muted-foreground">
+              {projectsLoading ? "加载中..." : `${projects.length} 个项目`}
+            </span>
           </div>
 
-          {projects.length === 0 ? (
+          {projectsError ? (
+            <Card className="glass-card">
+              <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted/50">
+                  <LuTriangleAlert className="w-7 h-7 text-muted-foreground" />
+                </div>
+                <p className="text-muted-foreground">{projectsError}</p>
+              </CardContent>
+            </Card>
+          ) : projectsLoading ? (
+            <Card className="glass-card">
+              <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted/50">
+                  <LuVideo className="w-7 h-7 text-muted-foreground" />
+                </div>
+                <p className="text-muted-foreground">正在加载项目...</p>
+              </CardContent>
+            </Card>
+          ) : projects.length === 0 ? (
             <Card className="glass-card">
               <CardContent className="flex flex-col items-center justify-center py-16 text-center">
                 <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted/50">
@@ -233,7 +281,7 @@ export default function HomePage() {
                             {project.name}
                           </h3>
                           <p className="text-xs text-muted-foreground mt-1">
-                            {project.productName} · {project.updatedAt.toLocaleDateString("zh-CN")}
+                            {(project.productName || "未命名商品")} · {new Date(project.updatedAt).toLocaleDateString("zh-CN")}
                           </p>
                         </div>
                       </CardContent>
